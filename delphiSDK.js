@@ -32,11 +32,13 @@ export class DelphiONNX {
         this.session = await InferenceSession.create("https://episphere.github.io/delphi-onnx/delphi.onnx", {
             executionProviders: ["wasm", "cpu"]
         })
+        
         this.rng = mulberry32RNG(this.seed)
-        this.delphiLabels = await fetchLabels()
+        
         this.nameToTokenId = {}
         this.tokenIdToName = {}
-        this.delphiLabels.forEach(obj => {
+        const delphiLabels = await fetchLabels()
+        delphiLabels.forEach(obj => {
             this.nameToTokenId[obj["name"]] = parseInt(obj["index"])
             this.tokenIdToName[obj["index"]] = obj["name"]
         })
@@ -56,6 +58,14 @@ export class DelphiONNX {
 
     convertAgeToYears(ages = [], precision = 1) {
         return ages.map(ageInDays => (ageInDays / NUM_DAYS_IN_A_YEAR).toFixed(precision))
+    }
+
+    getNextLogits(eventTokens, ages) {
+        return this.getLogits(eventTokens, ages, eventTokens.length - 1)
+    }
+    
+    getAllLogits(eventTokens, ages) {
+        return this.getLogits(eventTokens, ages, - 1)
     }
 
     async getLogits(eventTokens, ages, logitsIndex) {
