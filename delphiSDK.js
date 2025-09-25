@@ -1,192 +1,227 @@
 import { InferenceSession, Tensor } from "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.mjs"
 
-export const initSession = async () => {
-    const session = await InferenceSession.create("https://episphere.github.io/delphi-onnx/delphi.onnx", {
-        executionProviders: ["wasm"]
-    })
-    return session
+const NUM_DAYS_IN_A_YEAR = 365.25
+
+const mulberry32RNG = (seed = Date.now()) => {
+    return function () {
+        seed += 0x6D2B79F5
+        let z = seed
+        z = Math.imul(z ^ z >>> 15, z | 1)
+        z ^= z + Math.imul(z ^ z >>> 7, z | 61)
+        return ((z ^ z >>> 14) >>> 0) / 4294967296
+    }
 }
 
-export const getDelphiLogits = async (onnxSession, diseaseTokens, ages, logitsIndex, withDims = false,) => {
+const fetchLabels = async () => {
+    const baseURL = import.meta.url.split("/").slice(0, -1).join("/")
+    const delphiLabelsURL = `${baseURL}/delphi_labels_chapters_colours_icd.json`
+    return (await fetch(delphiLabelsURL)).json()
+}
 
-    // Only works for a batch size of 1!
-    const idxTensor = new onnxRuntime.Tensor(
-        "int64",
-        new BigInt64Array(diseaseTokens.map((x) => BigInt(x))),
-        [1, diseaseTokens.length]
-    );
-
-    const ageTensor = new onnxRuntime.Tensor("float32", new Float32Array(ages), [
-        1,
-        ages.length
-    ]);
-
-    const feeds = {
-        idx: idxTensor,
-        age: ageTensor
-    };
-
-    const results = await onnxSession.run(feeds);
-    const { data: logits, dims: logitsShape } = results.logits;
-
-    // const batchSize = logitsShape[0]; // Assuming batchSize always 1 for now, index calculation below will need adjustment otherwise
-    const numEvents = logitsShape[1];
-    const vocabSize = logitsShape[2];
-
-    let logitsForEvent = [];
-    // Return last event logits by default
-    if (logitsIndex === -1) {
-        // Return logits for all events
-        logitsForEvent = logits;
-    } else {
-        let eventLogitsIndex = (numEvents - 1) * vocabSize;
-        if (logitsIndex < logitsForEvent.length / vocabSize) {
-            eventLogitsIndex = logitsIndex * vocabSize;
-        }
-        logitsForEvent = logits.slice(
-            eventLogitsIndex,
-            eventLogitsIndex + vocabSize
-        );
+export class DelphiONNX {
+    constructor(options = {}) {
+        const {
+            modelURL = "https://episphere.github.io/delphi-onnx/delphi.onnx",
+            seed = Date.now()
+        } = options
+        this.modelURL = modelURL
+        this.seed = seed
     }
 
-    if (withDims) {
+    async initialize() {
+        this.session = await InferenceSession.create("https://episphere.github.io/delphi-onnx/delphi.onnx", {
+            executionProviders: ["wasm", "cpu"]
+        })
+        this.rng = mulberry32RNG(this.seed)
+        this.delphiLabels = await fetchLabels()
+        this.nameToTokenId = {}
+        this.tokenIdToName = {}
+        this.delphiLabels.forEach(obj => {
+            this.nameToTokenId[obj["name"]] = parseInt(obj["index"])
+            this.tokenIdToName[obj["index"]] = obj["name"]
+        })
+    }
+
+    tokenizeEvents(events = []) {
+        return events.map(event => this.nameToTokenId[event])
+    }
+
+    getEventsFromTokens(tokens = []) {
+        return tokens.map(tokenId => this.tokenIdToName[tokenId])
+    }
+
+    convertAgeToDays(ages = []) {
+        return ages.map(ageInYrs => ageInYrs * NUM_DAYS_IN_A_YEAR)
+    }
+
+    convertAgeToYears(ages = [], precision = 1) {
+        return ages.map(ageInDays => (ageInDays / NUM_DAYS_IN_A_YEAR).toFixed(precision))
+    }
+
+    async getLogits(eventTokens, ages, logitsIndex) {
+        if (!this.session || !this.rng) {
+            await this.initialize()
+        }
+        if (!logitsIndex || !Number.isInteger(logitsIndex)) {
+            logitsIndex = eventTokens.length - 1
+        }
+
+        // Only works for a batch size of 1!
+        const idxTensor = new Tensor(
+            "int64",
+            new BigInt64Array(eventTokens.map((x) => BigInt(x))),
+            [1, eventTokens.length]
+        )
+
+        const ageTensor = new Tensor("float32", new Float32Array(ages), [
+            1,
+            ages.length
+        ])
+
+        const feeds = {
+            idx: idxTensor,
+            age: ageTensor
+        }
+
+        const results = await this.session.run(feeds)
+        let { data: logits, dims: logitsShape } = results.logits
+
+        // const batchSize = logitsShape[0]; // Assuming batchSize always 1 for now, index calculation below will need adjustment otherwise
+        const numEvents = logitsShape[1]
+        const vocabSize = logitsShape[2]
+
+        let logitsForEvent = undefined
+        let dims = undefined
+        if (Number.isInteger(logitsIndex) && logitsIndex >= 0 && logitsIndex < numEvents) {
+            const eventLogitsIndex = logitsIndex * vocabSize
+            logitsForEvent = logits.slice(
+                eventLogitsIndex,
+                eventLogitsIndex + vocabSize
+            )
+            dims = [1, vocabSize]
+        } else if (logitsIndex === -1) {
+            logitsForEvent = logits
+            dims = logitsShape
+        }
+
         return {
             logits: logitsForEvent,
-            dims: logitsShape
-        };
-    } else {
-        return logitsForEvent;
+            dims
+        }
     }
-}
 
-export const generate = async (idx, age, options = {}) => {
-    const {
-        maxNewTokens = 100,
-        maxAge = 85 * 365.25,
-        noRepeat = true,
-        terminationTokens = [1269],
-        ignoreTokens = []
-    } = options;
+    async generateTrajectory(idx, age, options = {}) {
+        const {
+            maxNewTokens = 100,
+            maxAge = 85 * NUM_DAYS_IN_A_YEAR,
+            noRepeat = true,
+            terminationTokens = [1269],
+            ignoreTokens = []
+        } = options
 
-    const maskTime = -10000;
-    const finalMaxTokens = maxNewTokens === -1 ? 128 : maxNewTokens;
+        const maskTime = -10000
+        const finalMaxTokens = maxNewTokens === -1 ? 128 : maxNewTokens
 
-    let currentIdx = [...idx];
-    let currentAge = [...age];
+        let currentIdx = [...idx]
+        let currentAge = [...age]
 
-    for (let step = 0; step < finalMaxTokens; step++) {
-        const logits = await getDelphiLogits(currentIdx, currentAge);
-        console.log(logits);
-        for (const ignoreToken of ignoreTokens) {
-            if (ignoreToken < logits.length) {
-                logits[ignoreToken] = -Infinity;
+        for (let step = 0; step < finalMaxTokens; step++) {
+            const { logits } = await this.getLogits(currentIdx, currentAge)
+
+            ignoreTokens.forEach(ignoreToken => {
+                if (ignoreToken < logits.length) {
+                    logits[ignoreToken] = -Infinity
+                }
+            })
+
+            if (noRepeat) {
+                currentIdx.forEach(token => {
+                    if (token > 1 && token < logits.length) {
+                        logits[token] = -Infinity;
+                    }
+                })
+            }
+
+            const tSamples = logits.map(logit => {
+                const randomSample = -Math.exp(-logit) * Math.log(this.rng())
+                return Math.max(0, Math.min(maxAge, randomSample))
+            })
+
+            let minTime = Infinity
+            let minIndex = -1
+            tSamples.forEach((tSample, i) => {
+                if (tSample < minTime) {
+                    minTime = tSample;
+                    minIndex = i;
+                }
+            })
+
+            const ageNext = currentAge[currentAge.length - 1] + minTime
+            currentIdx.push(minIndex)
+            currentAge.push(ageNext)
+
+            const hasTerminationToken = currentIdx.some((token) =>
+                terminationTokens.includes(token)
+            )
+            const exceedsMaxAge = ageNext > maxAge;
+            if (hasTerminationToken || exceedsMaxAge) {
+                break
             }
         }
 
+        const finalLogitsOutput = await this.getLogits(currentIdx, currentAge, -1)
+
+        let terminationFound = false
+        let terminationCount = 0
+        currentIdx.forEach((event, i) => {
+            if (terminationTokens.includes(event)) {
+                terminationFound = true
+                terminationCount++
+            }
+            if ((terminationFound && terminationCount > 1) || currentAge[i] > maxAge) {
+                currentIdx[i] = 0
+                currentAge[i] = maskTime
+            }
+        })
+
+        let processedLogits = []
+        const vocabSize = finalLogitsOutput.dims[2]
         if (noRepeat) {
-            const fill = currentIdx.map((token) => (token === 1 ? 0 : token));
-            for (const token of fill) {
-                if (token > 0 && token < logits.length) {
-                    logits[token] = -Infinity;
-                }
+            for (let seqPos = 0; seqPos < currentIdx.length; seqPos++) {
+                const startIdx = seqPos * vocabSize;
+                const positionLogits = finalLogitsOutput.logits.slice(
+                    startIdx,
+                    startIdx + vocabSize
+                )
+
+                currentIdx
+                    .slice(0, seqPos + 1)
+                    .forEach(token => {
+                    if (token > 1 && token < positionLogits.length) {
+                        positionLogits[token] = -Infinity
+                    }
+                })
+
+                processedLogits.push(positionLogits)
+            }
+        } else {
+            for (let seqPos = 0; seqPos < currentIdx.length; seqPos++) {
+                const startIdx = seqPos * vocabSize;
+                const positionLogits = finalLogitsOutput.logits.slice(
+                    startIdx,
+                    startIdx + vocabSize
+                );
+                processedLogits.push(positionLogits)
             }
         }
+        
+        const currentEvents = currentIdx.map(idx => this.tokenIdToName[idx])
 
-        const expLogits = logits.map((x) => Math.exp(-x));
-        const randomSamples = logits.map(() => Math.random());
-        const tSamples = expLogits.map((expLogit, i) =>
-            Math.max(0, Math.min(365 * 80, -expLogit * Math.log(randomSamples[i])))
-        );
-
-        let minTime = Infinity;
-        let minIndex = 0;
-        for (let i = 0; i < tSamples.length; i++) {
-            if (tSamples[i] < minTime) {
-                minTime = tSamples[i];
-                minIndex = i;
-            }
-        }
-
-        const ageNext = currentAge[currentAge.length - 1] + minTime;
-        currentIdx.push(minIndex);
-        currentAge.push(ageNext);
-
-        const hasTerminationToken = currentIdx.some((token) =>
-            terminationTokens.includes(token)
-        );
-        const exceedsMaxAge = ageNext > maxAge;
-
-        if (hasTerminationToken || exceedsMaxAge) {
-            break;
+        return {
+            tokenIds: currentIdx,
+            events: currentEvents,
+            age: currentAge,
+            logits: processedLogits
         }
     }
-
-    const pad = Array(currentIdx.length).fill(false);
-    let terminationFound = false;
-    let terminationCount = 0;
-
-    for (let i = 0; i < currentIdx.length; i++) {
-        if (terminationTokens.includes(currentIdx[i])) {
-            terminationFound = true;
-            terminationCount++;
-        }
-
-        if (terminationFound && terminationCount > 1) {
-            pad[i] = true;
-        }
-
-        if (currentAge[i] > maxAge) {
-            pad[i] = true;
-        }
-    }
-
-    const finalLogitsOutput = await getDelphiLogits(
-        currentIdx,
-        currentAge,
-        -1,
-        true
-    );
-    for (let i = 0; i < pad.length; i++) {
-        if (pad[i]) {
-            currentIdx[i] = 0;
-            currentAge[i] = maskTime;
-        }
-    }
-
-    let processedLogits = [];
-    const vocabSize = finalLogitsOutput.dims[2];
-    if (noRepeat) {
-        for (let seqPos = 0; seqPos < currentIdx.length; seqPos++) {
-            const startIdx = seqPos * vocabSize;
-            const positionLogits = finalLogitsOutput.logits.slice(
-                startIdx,
-                startIdx + vocabSize
-            );
-
-            const fill = currentIdx
-                .slice(0, seqPos + 1)
-                .map((token) => (token === 1 ? 0 : token));
-            for (const token of fill) {
-                if (token > 0 && token < positionLogits.length) {
-                    positionLogits[token] = -Infinity;
-                }
-            }
-            processedLogits.push(positionLogits);
-        }
-    } else {
-        for (let seqPos = 0; seqPos < currentIdx.length; seqPos++) {
-            const startIdx = seqPos * vocabSize;
-            const positionLogits = finalLogitsOutput.logits.slice(
-                startIdx,
-                startIdx + vocabSize
-            );
-            processedLogits.push(positionLogits);
-        }
-    }
-
-    return {
-        idx: currentIdx,
-        age: currentAge,
-        logits: processedLogits
-    };
 }
