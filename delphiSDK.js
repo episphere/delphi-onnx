@@ -44,7 +44,7 @@ export class DelphiONNX {
         })
     }
 
-    tokenizeEvents(events = []) {
+    getTokensFromEvents(events = []) {
         let tokens = undefined
         if (Array.isArray(events)) {
             tokens = events.map(event => this.nameToTokenId[event])
