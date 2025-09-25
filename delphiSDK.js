@@ -45,19 +45,43 @@ export class DelphiONNX {
     }
 
     tokenizeEvents(events = []) {
-        return events.map(event => this.nameToTokenId[event])
+        let tokens = undefined
+        if (Array.isArray(events)) {
+            tokens = events.map(event => this.nameToTokenId[event])
+        } else {
+            tokens = this.nameToTokenId[events]
+        }
+        return tokens
     }
 
     getEventsFromTokens(tokens = []) {
-        return tokens.map(tokenId => this.tokenIdToName[tokenId])
+        let events = undefined
+        if (Array.isArray(tokens)) {
+            events = tokens.map(tokenId => this.tokenIdToName[tokenId])
+        } else {
+            events = this.tokenIdToName[tokens]
+        }
+        return events
     }
 
     convertAgeToDays(ages = []) {
-        return ages.map(ageInYrs => ageInYrs * NUM_DAYS_IN_A_YEAR)
+        let agesInDays = undefined
+        if (Array.isArray(ages)) {
+            agesInDays = ages.map(ageInYrs => ageInYrs * NUM_DAYS_IN_A_YEAR)
+        } else {
+            agesInDays = ages * NUM_DAYS_IN_A_YEAR
+        }
+        return ages
     }
 
     convertAgeToYears(ages = [], precision = 1) {
-        return ages.map(ageInDays => (ageInDays / NUM_DAYS_IN_A_YEAR).toFixed(precision))
+        let agesInYears = undefined
+        if (Array.isArray(ages)) {
+            agesInYears = ages.map(ageInDays => (ageInDays / NUM_DAYS_IN_A_YEAR).toFixed(precision))
+        } else {
+            agesInYears = (ages / NUM_DAYS_IN_A_YEAR).toFixed(precision)
+        }
+        return agesInYears
     }
 
     getNextLogits(eventTokens, ages) {
