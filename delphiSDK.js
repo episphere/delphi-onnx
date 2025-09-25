@@ -248,12 +248,9 @@ export class DelphiONNX {
                 processedLogits.push(positionLogits)
             }
         }
-        
-        const currentEvents = currentIdx.map(idx => this.tokenIdToName[idx])
 
         return {
             tokenIds: currentIdx,
-            events: currentEvents,
             age: currentAge,
             logits: processedLogits
         }
