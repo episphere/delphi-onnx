@@ -71,7 +71,7 @@ export class DelphiONNX {
         } else {
             agesInDays = ages * NUM_DAYS_IN_A_YEAR
         }
-        return ages
+        return agesInDays
     }
 
     convertAgeToYears(ages = [], precision = 1) {
