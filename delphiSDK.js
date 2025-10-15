@@ -1,6 +1,8 @@
 import { InferenceSession, Tensor } from "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.mjs"
 
+const MODEL_URL = "https://episphere.github.io/delphi-onnx/delphi.onnx"
 const NUM_DAYS_IN_A_YEAR = 365.25
+let instance = undefined
 
 const mulberry32RNG = (seed = Date.now()) => {
     return function () {
@@ -18,29 +20,38 @@ const fetchLabels = async () => {
     return (await fetch(delphiLabelsURL)).json()
 }
 
-export class DelphiONNX {
+export default class DelphiONNX {
     constructor(options = {}) {
         const {
-            modelURL = "https://episphere.github.io/delphi-onnx/delphi.onnx",
+            modelURL = MODEL_URL,
             seed = Date.now()
         } = options
         this.modelURL = modelURL
         this.seed = seed
+        this.rng = mulberry32RNG(this.seed)
+        
+        this.nameToTokenId = undefined
+        this.tokenIdToName = undefined
     }
 
     async initialize() {
-        this.session = await InferenceSession.create("https://episphere.github.io/delphi-onnx/delphi.onnx", {
-            executionProviders: ["wasm", "cpu"]
-        })
-        
-        this.rng = mulberry32RNG(this.seed)
         
         this.nameToTokenId = {}
         this.tokenIdToName = {}
+
+        if (!this.session) {
+            await this.getModel()
+        }      
         const delphiLabels = await fetchLabels()
-        delphiLabels.forEach(obj => {
+        for (const obj of delphiLabels) {
             this.nameToTokenId[obj["name"]] = parseInt(obj["index"])
             this.tokenIdToName[obj["index"]] = obj["name"]
+        }
+    }
+
+    async getModel() {
+        this.session = await InferenceSession.create("https://episphere.github.io/delphi-onnx/delphi.onnx", {
+            executionProviders: ["wasm", "cpu"]
         })
     }
 
@@ -94,7 +105,7 @@ export class DelphiONNX {
 
     async getLogits(eventTokens, ages, logitsIndex) {
         if (!this.session || !this.rng) {
-            await this.initialize()
+            await this.fetchModel()
         }
         if (!logitsIndex || !Number.isInteger(logitsIndex)) {
             logitsIndex = eventTokens.length - 1
@@ -144,7 +155,7 @@ export class DelphiONNX {
         }
     }
 
-    async generateTrajectory(idx, age, options = {}) {
+    async generateTrajectory(idx, ages, options = {}) {
         const {
             maxNewTokens = 100,
             maxAge = 85 * NUM_DAYS_IN_A_YEAR,
@@ -155,9 +166,9 @@ export class DelphiONNX {
 
         const maskTime = -10000
         const finalMaxTokens = maxNewTokens === -1 ? 128 : maxNewTokens
-
+        
         let currentIdx = [...idx]
-        let currentAge = [...age]
+        let currentAge = [...ages]
 
         for (let step = 0; step < finalMaxTokens; step++) {
             const { logits } = await this.getLogits(currentIdx, currentAge)
@@ -255,4 +266,43 @@ export class DelphiONNX {
             logits: processedLogits
         }
     }
+}
+
+export const generateTrajectory = async ({modelURL=MODEL_URL, seed=Date.now(), eventsList, options}) => {
+    if (typeof(instance) === 'undefined') {
+        instance = new DelphiONNX({modelURL, seed})
+    }
+
+    if (!Array.isArray(eventsList)) {
+            throw new Error("Events List must be an array of objects!")
+        }
+
+        if (typeof(instance.nameToTokenId) === 'undefined') {
+            await instance.initialize()
+        }
+        
+        let idx = eventsList.map(e => e['event'])
+        let ages = eventsList.map(e => e['age'])
+        
+        if (idx.some(evt => typeof(evt) === 'string')) {
+            idx = instance.getTokensFromEvents(idx)
+        }
+        if (ages.every(ageForEvt => ageForEvt < 365)) {
+            ages = instance.convertAgeToDays(ages)
+        }
+
+        const generatedTrajectory = await instance.generateTrajectory(idx, ages, options)
+        const predictedEvents = instance.getEventsFromTokens(generatedTrajectory.tokenIds);
+        const predictedAges = instance.convertAgeToYears(generatedTrajectory.age, 3);
+        
+        const reformattedTrajectory = predictedEvents.map((event, i) => {
+            const obj = {
+                event,
+                age: predictedAges[i],
+                logits: generatedTrajectory.logits[i]
+            }
+            return obj
+        })
+        
+        return reformattedTrajectory
 }
