@@ -145,11 +145,12 @@ class DelphiConfig:
 
 class Delphi(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, config, embeddingsOnly=False):
         super().__init__()
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
+        self.embeddingsOnly = embeddingsOnly
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
@@ -162,19 +163,20 @@ class Delphi(nn.Module):
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        if not self.embeddingsOnly:
+            self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+            # with weight tying when using torch.compile() some warnings get generated:
+            # "UserWarning: functional_call was passed multiple values for tied weights.
+            # This behavior is deprecated and will be an error in future versions"
+            # not 100% sure what this is, so far seems to be harmless. TODO investigate
+            self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
-        # init all weights
-        self.apply(self._init_weights)
-        # apply special scaled init to the residual projections, per GPT-2 paper
-        for pn, p in self.named_parameters():
-            if pn.endswith('c_proj.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+            # init all weights
+            self.apply(self._init_weights)
+            # apply special scaled init to the residual projections, per GPT-2 paper
+            for pn, p in self.named_parameters():
+                if pn.endswith('c_proj.weight'):
+                    torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
@@ -231,6 +233,9 @@ class Delphi(nn.Module):
         x = self.transformer.ln_f(x)
         att = torch.stack(att)
 
+        if self.embeddingsOnly:
+            return x, None, None
+        
         if targets is not None:
             # next token cross entropy loss, padding masked
             logits = self.lm_head(x)

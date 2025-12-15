@@ -6,7 +6,7 @@ from typing import Any, Dict, Tuple
 
 import torch
 
-from model import Delphi, DelphiConfig
+from amendedModel import Delphi, DelphiConfig
 
 
 def _resolve_state_dict(ckpt: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -31,13 +31,14 @@ class DelphiForONNX(torch.nn.Module):
         self.model = model
 
     def forward(self, idx: torch.Tensor, age: torch.Tensor) -> torch.Tensor:
-        logits, _, _ = self.model(idx, age, targets=None, targets_age=None)
-        return logits
+        output, _, _ = self.model(idx, age, targets=None, targets_age=None)
+        return output
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True, help="Path to PyTorch checkpoint (.pt/.pth)")
-    parser.add_argument("--output", default="model.onnx", help="Path to write ONNX file")
+    parser.add_argument("--embeddings-only", action="store_true", help="Return a model without the lm_head, i.e., just the embeddings")
+    parser.add_argument("--output", default="model.onnx", help="Path to write the ONNX model to")
     parser.add_argument("--seq-len", type=int, default=128, help="Dummy sequence length for export")
     parser.add_argument("--batch-size", type=int, default=1, help="Dummy batch size for export")
     parser.add_argument("--opset", type=int, default=17, help="ONNX opset version (e.g., 17 or 18)")
@@ -65,7 +66,7 @@ def main() -> None:
         if hasattr(cfg, k):
             print(f"  {k}: {getattr(cfg, k)}")
 
-    model = Delphi(cfg).to(device)
+    model = Delphi(config=cfg, embeddingsOnly=args.embeddings_only).to(device)
     missing, unexpected = model.load_state_dict(state_dict, strict=args.strict_load)
     print("Loaded state_dict (strict={}):".format(args.strict_load))
     if missing:
@@ -80,14 +81,14 @@ def main() -> None:
     example_idx = torch.zeros(B, T, dtype=torch.long, device=device)
     example_age = torch.zeros(B, T, dtype=torch.float32, device=device)
 
-    wrapper = DelphiForONNX(model).to(device)
+    wrapper = DelphiForONNX(model=model).to(device)
 
     input_names = ["idx", "age"]
-    output_names = ["logits", "age"]
+    output_names = ["embeddings", "attention"] if args.embeddings_only else ["logits"]
     dynamic_axes = {
         "idx": {0: "batch", 1: "seq"},
         "age": {0: "batch", 1: "seq"},
-        "logits": {0: "batch", 1: "seq"},
+        "output": {0: "batch", 1: "seq"},
     }
 
 
@@ -103,7 +104,8 @@ def main() -> None:
             input_names=input_names,
             output_names=output_names,
             dynamic_axes=dynamic_axes,
-            opset_version=args.opset
+            opset_version=args.opset,
+            dynamo=False
         )
 
     print("ONNX export complete.")
@@ -118,12 +120,12 @@ def main() -> None:
 
     wrapper.eval()
     with torch.no_grad():
-        pt_logits = wrapper(idx, age).cpu().numpy()
+        pt_outputs = wrapper(idx, age).cpu().numpy()
 
-    sess = ort.InferenceSession("delphi.onnx", providers=["CPUExecutionProvider"])
-    onnx_logits = sess.run(["logits"], {"idx": idx.numpy(), "age": age.numpy()})[0]
+    sess = ort.InferenceSession(args.output, providers=["CPUExecutionProvider"])
+    onnx_outputs = sess.run(output_names, {"idx": idx.numpy(), "age": age.numpy()})[0]
 
-    print("Max abs diff:", np.max(np.abs(pt_logits - onnx_logits)))
+    print("Max abs diff:", np.max(np.abs(pt_outputs - onnx_outputs)))
 
 if __name__ == "__main__":
     main()
