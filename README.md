@@ -1,7 +1,7 @@
 # JavaScript SDK for Delphi-2M (+ ONNX Export scripts)
 
 ### Example Usage
-> Trajectory Generation:
+#### Trajectory Generation:
 ```js
 let eventsList = [
     {
@@ -86,7 +86,7 @@ const { generateTrajectory } = await import("https://episphere.github.io/delphi-
 await generateTrajectory({eventsList, seed: 42})
 ```
 
-> Embeddings:
+#### Embeddings:
 ```js
 let eventsList = [
     {
@@ -171,9 +171,9 @@ const { getEmbeddings } = await import("https://episphere.github.io/delphi-onnx/
 await getEmbeddings({eventsList, pooling: 'mean'}) // pooling could be mean, max, or last. If not specified, embeddings for all events will be returned.
 ```
 
-To run the export script:
-> For the predictive model:
+### Export script:
+#### For the predictive model:
 `python export_onnx.py --checkpoint ckpt.pt --output model.onnx`
 
-> For the embeddings only model:
+#### For the embeddings only model:
 `python export_onnx.py --checkpoint ckpt.pt --output embeddingsModel.onnx --embeddings-only`
