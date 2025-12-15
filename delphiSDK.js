@@ -161,7 +161,6 @@ export default class DelphiONNX {
         const results = await this.session.run(feeds)
         let { data: logits, dims: logitsShape } = results.logits
 
-        // const batchSize = logitsShape[0]; // Assuming batchSize always 1 for now, index calculation below will need adjustment otherwise
         const numEvents = logitsShape[1]
         const vocabSize = logitsShape[2]
 
@@ -212,7 +211,7 @@ export default class DelphiONNX {
             if (noRepeat) {
                 currentIdx.forEach(token => {
                     if (token > 1 && token < logits.length) {
-                        logits[token] = -Infinity;
+                        logits[token] = -Infinity
                     }
                 })
             }
@@ -226,8 +225,8 @@ export default class DelphiONNX {
             let minIndex = -1
             tSamples.forEach((tSample, i) => {
                 if (tSample < minTime) {
-                    minTime = tSample;
-                    minIndex = i;
+                    minTime = tSample
+                    minIndex = i
                 }
             })
 
@@ -238,7 +237,7 @@ export default class DelphiONNX {
             const hasTerminationToken = currentIdx.some((token) =>
                 terminationTokens.includes(token)
             )
-            const exceedsMaxAge = ageNext > maxAge;
+            const exceedsMaxAge = ageNext > maxAge
             if (hasTerminationToken || exceedsMaxAge) {
                 break
             }
@@ -263,7 +262,7 @@ export default class DelphiONNX {
         const vocabSize = finalLogitsOutput.dims[2]
         if (noRepeat) {
             for (let seqPos = 0; seqPos < currentIdx.length; seqPos++) {
-                const startIdx = seqPos * vocabSize;
+                const startIdx = seqPos * vocabSize
                 const positionLogits = finalLogitsOutput.logits.slice(
                     startIdx,
                     startIdx + vocabSize
@@ -281,11 +280,11 @@ export default class DelphiONNX {
             }
         } else {
             for (let seqPos = 0; seqPos < currentIdx.length; seqPos++) {
-                const startIdx = seqPos * vocabSize;
+                const startIdx = seqPos * vocabSize
                 const positionLogits = finalLogitsOutput.logits.slice(
                     startIdx,
                     startIdx + vocabSize
-                );
+                )
                 processedLogits.push(positionLogits)
             }
         }
@@ -451,8 +450,8 @@ export const generateTrajectory = async ({ modelURL = MODEL_URL, seed = Date.now
     }
 
     const generatedTrajectory = await instance.generateTrajectory(idx, ages, options)
-    const predictedEvents = instance.getEventsFromTokens(generatedTrajectory.tokenIds);
-    const predictedAges = instance.convertAgeToYears(generatedTrajectory.age, 3);
+    const predictedEvents = instance.getEventsFromTokens(generatedTrajectory.tokenIds)
+    const predictedAges = instance.convertAgeToYears(generatedTrajectory.age, 3)
 
     const reformattedTrajectory = predictedEvents.map((event, i) => {
         const obj = {
