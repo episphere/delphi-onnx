@@ -84,7 +84,7 @@ def main() -> None:
     wrapper = DelphiForONNX(model=model).to(device)
 
     input_names = ["idx", "age"]
-    output_names = ["embeddings", "attention"] if args.embeddings_only else ["logits"]
+    output_names = ["embeddings"] if args.embeddings_only else ["logits"]
     dynamic_axes = {
         "idx": {0: "batch", 1: "seq"},
         "age": {0: "batch", 1: "seq"},

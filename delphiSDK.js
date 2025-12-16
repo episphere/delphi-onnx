@@ -360,11 +360,11 @@ export class DelphiEmbeddings {
 
         const { embeddings } = await this.session.run(feeds)
         let results
-        switch(pooling) {
+        switch (pooling) {
             case 'mean':
                 results = this.meanPooling(embeddings)
                 break
-            
+
             case 'max':
                 results = this.maxPooling(embeddings)
                 break
@@ -414,13 +414,13 @@ export class DelphiEmbeddings {
 
     lastToken(embeddingsTensor) {
         const [_, numTokens, embeddingDimension] = embeddingsTensor.dims
-        const pooled = embeddingsTensor.cpuData.slice((numTokens-1) * embeddingDimension)
+        const pooled = embeddingsTensor.cpuData.slice((numTokens - 1) * embeddingDimension)
         return pooled
     }
 
     unflatten(embeddingsTensor) {
         const [_, numTokens, embeddingDimension] = embeddingsTensor.dims
-        const unflattened = Array(numTokens).fill(undefined).map((token, i) => embeddingsTensor.cpuData.slice(i * embeddingDimension, (i+1) * embeddingDimension))
+        const unflattened = Array(numTokens).fill(undefined).map((token, i) => embeddingsTensor.cpuData.slice(i * embeddingDimension, (i + 1) * embeddingDimension))
         return unflattened
     }
 
